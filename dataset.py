@@ -22,6 +22,7 @@ class PetDataset(Dataset):
         task: 'classify' | 'localize' | 'segment' | 'all'
         """
         self.root = root
+        self.split    = split
         self.img_size = img_size
         self.transform = transform
         self.task = task
