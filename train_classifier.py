@@ -40,7 +40,7 @@ def train_classifier(data_root: str, epochs: int = 30, lr: float = 1e-3,
             total_loss += loss.item() * imgs.size(0)
             correct += (logits.argmax(1) == labels).sum().item()
             total += imgs.size(0)
-        scheduler.step()
+        scheduler.step(val_acc)
 
         train_loss = total_loss / total
         train_acc = correct / total
