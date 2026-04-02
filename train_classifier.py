@@ -2,33 +2,15 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import wandb
-import numpy as np
-from PIL import Image
 from models.vgg11 import VGG11
 from dataset import PetDataset
 
 
-def mixup_data(x, y, alpha=0.2):
-    """Mixup augmentation — reduces overfitting significantly."""
-    if alpha > 0:
-        lam = np.random.beta(alpha, alpha)
-    else:
-        lam = 1
-    batch_size = x.size(0)
-    index = torch.randperm(batch_size).to(x.device)
-    mixed_x = lam * x + (1 - lam) * x[index]
-    y_a, y_b = y, y[index]
-    return mixed_x, y_a, y_b, lam
-
-
-def mixup_criterion(criterion, pred, y_a, y_b, lam):
-    return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
-
-
-def train_classifier(data_root: str, epochs: int = 60, lr: float = 1e-3,
+def train_classifier(data_root: str, epochs: int = 60, lr: float = 3e-4,
                      batch_size: int = 64, dropout_p: float = 0.4,
                      device: str = "cuda", save_path: str = "classifier.pth"):
-    wandb.init(project="da6401-a2", name="vgg11-classifier-v2")
+
+    wandb.init(project="da6401-a2", name="vgg11-classifier-v3")
 
     train_ds = PetDataset(data_root, split="train", task="classify")
     val_ds   = PetDataset(data_root, split="val",   task="classify")
@@ -38,18 +20,20 @@ def train_classifier(data_root: str, epochs: int = 60, lr: float = 1e-3,
                           num_workers=2, pin_memory=True)
 
     model     = VGG11(num_classes=37, dropout_p=dropout_p).to(device)
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr,
-                                momentum=0.9, weight_decay=5e-4, nesterov=True)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
 
-    # Warmup for 5 epochs then cosine decay
+    # Warmup 3 epochs → cosine decay
     def lr_lambda(epoch):
-        if epoch < 5:
-            return (epoch + 1) / 5      # linear warmup
-        progress = (epoch - 5) / (epochs - 5)
-        return 0.5 * (1 + np.cos(np.pi * progress))  # cosine decay
+        if epoch < 3:
+            return (epoch + 1) / 3
+        progress = (epoch - 3) / (epochs - 3)
+        import math
+        return 0.5 * (1 + math.cos(math.pi * progress))
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)  # label smoothing reduces overfit
+
+    # Label smoothing only — no mixup
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
     best_val_acc = 0.0
 
@@ -60,23 +44,15 @@ def train_classifier(data_root: str, epochs: int = 60, lr: float = 1e-3,
         for batch in train_dl:
             imgs   = batch["image"].to(device)
             labels = batch["label"].to(device)
-
-            # Apply mixup
-            imgs_mix, y_a, y_b, lam = mixup_data(imgs, labels, alpha=0.2)
-
             optimizer.zero_grad()
-            logits = model(imgs_mix)
-            loss   = mixup_criterion(criterion, logits, y_a, y_b, lam)
+            logits = model(imgs)
+            loss   = criterion(logits, labels)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
-
             total_loss += loss.item() * imgs.size(0)
-            # For accuracy, use original labels (not mixed)
-            with torch.no_grad():
-                orig_logits = model(imgs)
-            correct += (orig_logits.argmax(1) == labels).sum().item()
-            total   += imgs.size(0)
+            correct    += (logits.argmax(1) == labels).sum().item()
+            total      += imgs.size(0)
 
         scheduler.step()
         train_loss = total_loss / total
@@ -90,20 +66,21 @@ def train_classifier(data_root: str, epochs: int = 60, lr: float = 1e-3,
                 imgs   = batch["image"].to(device)
                 labels = batch["label"].to(device)
                 logits = model(imgs)
-                loss   = criterion(logits, labels)
+                loss   = nn.CrossEntropyLoss()(logits, labels)  # no smoothing for eval
                 val_loss    += loss.item() * imgs.size(0)
                 val_correct += (logits.argmax(1) == labels).sum().item()
                 val_total   += imgs.size(0)
+
         val_loss /= val_total
         val_acc   = val_correct / val_total
 
         current_lr = optimizer.param_groups[0]['lr']
-        print(f"Epoch {epoch+1}/{epochs} | LR: {current_lr:.5f} | "
+        print(f"Epoch {epoch+1}/{epochs} | LR: {current_lr:.6f} | "
               f"Train Loss: {train_loss:.4f} Acc: {train_acc:.4f} | "
               f"Val Loss: {val_loss:.4f} Acc: {val_acc:.4f}")
         wandb.log({"train/loss": train_loss, "train/acc": train_acc,
                    "val/loss":   val_loss,   "val/acc":   val_acc,
-                   "lr": current_lr,         "epoch":     epoch+1})
+                   "lr": current_lr,         "epoch":     epoch + 1})
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
@@ -120,7 +97,7 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--data_root",  default="./oxford-iiit-pet")
     p.add_argument("--epochs",     type=int,   default=60)
-    p.add_argument("--lr",         type=float, default=0.01)
+    p.add_argument("--lr",         type=float, default=3e-4)
     p.add_argument("--batch_size", type=int,   default=64)
     p.add_argument("--dropout_p",  type=float, default=0.4)
     p.add_argument("--save_path",  default="classifier.pth")
