@@ -20,8 +20,9 @@ def train_classifier(data_root: str, epochs: int = 30, lr: float = 1e-3,
 
     model = VGG11(num_classes=37, dropout_p=dropout_p).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=epochs)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+      optimizer, mode='max', patience=5, factor=0.5, verbose=True
+    )
     criterion = nn.CrossEntropyLoss()
 
     best_val_acc = 0.0
