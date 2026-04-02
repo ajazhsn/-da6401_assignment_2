@@ -22,7 +22,9 @@ def train_localizer(data_root: str, classifier_ckpt: str = "classifier.pth",
     vgg = VGG11(num_classes=37)
     vgg.load_state_dict(torch.load(classifier_ckpt, map_location="cpu"))
 
-    model = VGG11Localizer(pretrained_vgg=vgg, freeze_blocks=3).to(device)
+    # freeze_blocks=2 → only freeze first 2 blocks, fine-tune blocks 3,4,5
+    model = VGG11Localizer(pretrained_vgg=vgg, freeze_blocks=2).to(device)
+
     optimizer = torch.optim.Adam(
         filter(lambda p: p.requires_grad, model.parameters()),
         lr=lr, weight_decay=1e-4)
@@ -32,12 +34,11 @@ def train_localizer(data_root: str, classifier_ckpt: str = "classifier.pth",
     mse_loss = nn.MSELoss()
     iou_loss = IoULoss(reduction="mean")
 
-    IMG_SIZE = 224.0  # normalize coords to [0,1] range for stable MSE
-
+    IMG_SIZE = 224.0
     best_val_loss = float("inf")
 
     for epoch in range(epochs):
-        # ── TRAINING ──────────────────────────────
+        # ── TRAINING ──────────────────────────────────────────
         model.train()
         total_loss = 0; n = 0
         for batch in train_dl:
@@ -49,21 +50,23 @@ def train_localizer(data_root: str, classifier_ckpt: str = "classifier.pth",
             imgs   = imgs[mask]
             bboxes = bboxes[mask]
 
-            # Normalize to [0,1] for stable MSE
-            bboxes_norm = bboxes / IMG_SIZE
+            bboxes_norm = bboxes / IMG_SIZE      # ground truth in [0,1]
 
             optimizer.zero_grad()
-            preds = model(imgs) / IMG_SIZE   # normalize preds too
-            loss  = mse_loss(preds, bboxes_norm) + iou_loss(preds, bboxes_norm)
+            preds_pixels = model(imgs)           # model outputs pixel space (Sigmoid * img_size)
+            preds_norm   = preds_pixels / IMG_SIZE   # normalize for loss
+
+            loss = mse_loss(preds_norm, bboxes_norm) + iou_loss(preds_norm, bboxes_norm)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
+
             total_loss += loss.item() * imgs.size(0)
             n += imgs.size(0)
 
         train_loss = total_loss / max(n, 1)
 
-        # ── VALIDATION ────────────────────────────
+        # ── VALIDATION ────────────────────────────────────────
         model.eval()
         val_loss = 0; vn = 0
         with torch.no_grad():
@@ -75,9 +78,12 @@ def train_localizer(data_root: str, classifier_ckpt: str = "classifier.pth",
                     continue
                 imgs   = imgs[mask]
                 bboxes = bboxes[mask]
-                bboxes_norm = bboxes / IMG_SIZE
-                preds  = model(imgs) / IMG_SIZE
-                loss   = mse_loss(preds, bboxes_norm) + iou_loss(preds, bboxes_norm)
+
+                bboxes_norm  = bboxes / IMG_SIZE
+                preds_pixels = model(imgs)
+                preds_norm   = preds_pixels / IMG_SIZE
+
+                loss = mse_loss(preds_norm, bboxes_norm) + iou_loss(preds_norm, bboxes_norm)
                 val_loss += loss.item() * imgs.size(0)
                 vn += imgs.size(0)
 
@@ -87,7 +93,7 @@ def train_localizer(data_root: str, classifier_ckpt: str = "classifier.pth",
         print(f"Epoch {epoch+1}/{epochs} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
         wandb.log({"train/loc_loss": train_loss, "val/loc_loss": val_loss, "epoch": epoch+1})
 
-        # ── SAVE BEST ─────────────────────────────
+        # ── SAVE BEST ─────────────────────────────────────────
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             torch.save(model.state_dict(), save_path)
