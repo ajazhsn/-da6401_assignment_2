@@ -89,14 +89,23 @@ class PetDataset(Dataset):
         h = ymax - ymin
         return [xc, yc, w, h]
 
-    def _preprocess_img(self, img: Image.Image) -> torch.Tensor:
+    def _preprocess_img(self, img: Image.Image, augment: bool = False) -> torch.Tensor:
         img = img.convert("RGB").resize((self.img_size, self.img_size))
-        x = torch.from_numpy(np.array(img)).float() / 255.0
-        x = x.permute(2, 0, 1)  # HWC → CHW
-        mean = torch.tensor(self.MEAN).view(3, 1, 1)
-        std = torch.tensor(self.STD).view(3, 1, 1)
+        x = np.array(img).astype(np.float32) / 255.0
+        
+        if augment:
+            # Random horizontal flip
+            if np.random.rand() > 0.5:
+                x = x[:, ::-1, :].copy()
+            # Random brightness
+            factor = np.random.uniform(0.8, 1.2)
+            x = np.clip(x * factor, 0, 1)
+        
+        x = torch.from_numpy(x).permute(2, 0, 1)
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+        std  = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
         return (x - mean) / std
-
+        
     def __len__(self):
         return len(self.indices)
 
@@ -106,7 +115,7 @@ class PetDataset(Dataset):
 
         img_path = os.path.join(self.root, "images", name + ".jpg")
         img = Image.open(img_path)
-        img_tensor = self._preprocess_img(img)
+        img_tensor = self._preprocess_img(img, augment=(self.split == 'train'))
 
         sample = {"image": img_tensor, "label": torch.tensor(
             class_id, dtype=torch.long)}
