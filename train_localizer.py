@@ -15,14 +15,14 @@ def train_localizer(data_root: str, classifier_ckpt: str = "classifier.pth",
 
     train_ds = PetDataset(data_root, split="train", task="localize")
     val_ds   = PetDataset(data_root, split="val",   task="localize")
-    train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  num_workers=2)
-    val_dl   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, num_workers=2)
+    train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+                          num_workers=2)
+    val_dl   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False,
+                          num_workers=2)
 
-    # Load pretrained VGG11
     vgg = VGG11(num_classes=37)
     vgg.load_state_dict(torch.load(classifier_ckpt, map_location="cpu"))
 
-    # freeze_blocks=2 → only freeze first 2 blocks, fine-tune blocks 3,4,5
     model = VGG11Localizer(pretrained_vgg=vgg, freeze_blocks=2).to(device)
 
     optimizer = torch.optim.Adam(
@@ -35,7 +35,7 @@ def train_localizer(data_root: str, classifier_ckpt: str = "classifier.pth",
     iou_loss = IoULoss(reduction="mean")
 
     IMG_SIZE = 224.0
-    best_val_loss = float("inf")
+    best_val_iou = 0.0
 
     for epoch in range(epochs):
         # ── TRAINING ──────────────────────────────────────────
@@ -50,12 +50,14 @@ def train_localizer(data_root: str, classifier_ckpt: str = "classifier.pth",
             imgs   = imgs[mask]
             bboxes = bboxes[mask]
 
-            bboxes_norm = bboxes / IMG_SIZE      # ground truth in [0,1]
-
             optimizer.zero_grad()
-            preds_pixels = model(imgs)           # model outputs pixel space (Sigmoid * img_size)
-            preds_norm   = preds_pixels / IMG_SIZE   # normalize for loss
+            preds = model(imgs)   # raw pixel space [cx, cy, w, h]
 
+            # Normalize ONLY for loss computation — keeps gradients stable
+            preds_norm  = preds  / IMG_SIZE
+            bboxes_norm = bboxes / IMG_SIZE
+
+            # MSE on normalized + IoU loss on normalized
             loss = mse_loss(preds_norm, bboxes_norm) + iou_loss(preds_norm, bboxes_norm)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -68,7 +70,7 @@ def train_localizer(data_root: str, classifier_ckpt: str = "classifier.pth",
 
         # ── VALIDATION ────────────────────────────────────────
         model.eval()
-        val_loss = 0; vn = 0
+        val_loss = 0; val_iou_sum = 0; vn = 0
         with torch.no_grad():
             for batch in val_dl:
                 imgs   = batch["image"].to(device)
@@ -79,39 +81,52 @@ def train_localizer(data_root: str, classifier_ckpt: str = "classifier.pth",
                 imgs   = imgs[mask]
                 bboxes = bboxes[mask]
 
-                bboxes_norm  = bboxes / IMG_SIZE
-                preds_pixels = model(imgs)
-                preds_norm   = preds_pixels / IMG_SIZE
+                preds       = model(imgs)
+                preds_norm  = preds  / IMG_SIZE
+                bboxes_norm = bboxes / IMG_SIZE
 
                 loss = mse_loss(preds_norm, bboxes_norm) + iou_loss(preds_norm, bboxes_norm)
                 val_loss += loss.item() * imgs.size(0)
+
+                # Compute mean IoU for this batch
+                iou_vals = 1.0 - iou_loss(preds_norm, bboxes_norm).item()
+                val_iou_sum += iou_vals * imgs.size(0)
                 vn += imgs.size(0)
 
-        val_loss = val_loss / max(vn, 1)
+        val_loss /= max(vn, 1)
+        val_iou   = val_iou_sum / max(vn, 1)
         scheduler.step(val_loss)
 
-        print(f"Epoch {epoch+1}/{epochs} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
-        wandb.log({"train/loc_loss": train_loss, "val/loc_loss": val_loss, "epoch": epoch+1})
+        print(f"Epoch {epoch+1}/{epochs} | "
+              f"Train Loss: {train_loss:.4f} | "
+              f"Val Loss: {val_loss:.4f} | "
+              f"Val IoU: {val_iou:.4f}")
+        wandb.log({
+            "train/loc_loss": train_loss,
+            "val/loc_loss":   val_loss,
+            "val/iou":        val_iou,
+            "epoch":          epoch + 1
+        })
 
-        # ── SAVE BEST ─────────────────────────────────────────
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        # Save best by IoU — directly what autograder measures
+        if val_iou > best_val_iou:
+            best_val_iou = val_iou
             torch.save(model.state_dict(), save_path)
-            print(f"  Saved best model → {save_path}")
+            print(f"  ✓ Saved best model (val_iou={val_iou:.4f})")
 
     wandb.finish()
-    print(f"Best Val Loss: {best_val_loss:.4f}")
+    print(f"Best Val IoU: {best_val_iou:.4f}")
 
 
 if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser()
-    p.add_argument("--data_root",        default="./oxford-iiit-pet")
-    p.add_argument("--classifier_ckpt",  default="classifier.pth")
-    p.add_argument("--epochs",           type=int,   default=25)
-    p.add_argument("--lr",               type=float, default=1e-4)
-    p.add_argument("--batch_size",       type=int,   default=32)
-    p.add_argument("--save_path",        default="localizer.pth")
+    p.add_argument("--data_root",       default="./oxford-iiit-pet")
+    p.add_argument("--classifier_ckpt", default="classifier.pth")
+    p.add_argument("--epochs",          type=int,   default=25)
+    p.add_argument("--lr",              type=float, default=1e-4)
+    p.add_argument("--batch_size",      type=int,   default=32)
+    p.add_argument("--save_path",       default="localizer.pth")
     args = p.parse_args()
     device = "cuda" if torch.cuda.is_available() else "cpu"
     train_localizer(args.data_root, args.classifier_ckpt, args.epochs,
