@@ -18,6 +18,7 @@ class MultiTaskPerceptionModel(nn.Module):
     Single forward pass → (class_logits, bbox_pred, seg_mask_logits)
     Downloads weights from Google Drive and shares the VGG11 backbone.
     """
+
     def __init__(self,
                  classifier_ckpt: str = "checkpoints/classifier.pth",
                  localizer_ckpt:  str = "checkpoints/localizer.pth",
@@ -54,25 +55,30 @@ class MultiTaskPerceptionModel(nn.Module):
 
         # ── Classification head ────────────────────────────────
         self.cls_avgpool = self.classifier.avgpool
-        self.cls_head    = self.classifier.classifier
+        self.cls_head = self.classifier.classifier
 
         # ── Localizer — extract regression head ────────────────
         _loc = VGG11Localizer(pretrained_vgg=self.classifier)
         _loc.load_state_dict(
             torch.load(localizer_ckpt, map_location=device))
         self.loc_avgpool = _loc.avgpool
-        self.loc_head    = _loc.regressor
+        self.loc_head = _loc.regressor
 
         # ── UNet — extract decoder ─────────────────────────────
         _unet = VGG11UNet(pretrained_vgg=self.classifier, num_classes=3)
         _unet.load_state_dict(
             torch.load(unet_ckpt, map_location=device))
-        self.unet_up5  = _unet.up5;  self.unet_dec5 = _unet.dec5
-        self.unet_up4  = _unet.up4;  self.unet_dec4 = _unet.dec4
-        self.unet_up3  = _unet.up3;  self.unet_dec3 = _unet.dec3
-        self.unet_up2  = _unet.up2;  self.unet_dec2 = _unet.dec2
-        self.unet_up1  = _unet.up1;  self.unet_dec1 = _unet.dec1
-        self.unet_out  = _unet.out_conv
+        self.unet_up5 = _unet.up5
+        self.unet_dec5 = _unet.dec5
+        self.unet_up4 = _unet.up4
+        self.unet_dec4 = _unet.dec4
+        self.unet_up3 = _unet.up3
+        self.unet_dec3 = _unet.dec3
+        self.unet_up2 = _unet.up2
+        self.unet_dec2 = _unet.dec2
+        self.unet_up1 = _unet.up1
+        self.unet_dec1 = _unet.dec1
+        self.unet_out = _unet.out_conv
 
         self.to(device)
 
@@ -92,11 +98,11 @@ class MultiTaskPerceptionModel(nn.Module):
         e5 = self.shared_enc5(e4)  # 512,   7
 
         # ── Classification ─────────────────────────────────────
-        cls_feat     = torch.flatten(self.cls_avgpool(e5), 1)
+        cls_feat = torch.flatten(self.cls_avgpool(e5), 1)
         class_logits = self.cls_head(cls_feat)
 
         # ── Localization ───────────────────────────────────────
-        loc_feat  = torch.flatten(self.loc_avgpool(e5), 1)
+        loc_feat = torch.flatten(self.loc_avgpool(e5), 1)
         bbox_pred = self.loc_head(loc_feat)
 
         # ── Segmentation decoder ───────────────────────────────
@@ -107,7 +113,12 @@ class MultiTaskPerceptionModel(nn.Module):
         d1 = self.unet_dec1(self.unet_up1(d2))
         seg_logits = self.unet_out(d1)
 
-        return class_logits, bbox_pred, seg_logits
+        # NEW - returns dictionary
+        return {
+            'classification': class_logits,
+            'localization':   bbox_pred,
+            'segmentation':   seg_logits
+        }
 
 
 if __name__ == "__main__":
