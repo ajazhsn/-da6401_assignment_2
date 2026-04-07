@@ -6,7 +6,6 @@ from models.vgg11 import VGG11
 from models.localizer import VGG11Localizer
 from models.unet import VGG11UNet
 
-# Alias
 VGG11Encoder = VGG11
 
 
@@ -28,33 +27,36 @@ class MultiTaskPerceptionModel(nn.Module):
         gdown.download(id="1H1Nv9hUhrRnIulPAmRYNpCcTqbUgSBdp",
                        output=unet_ckpt,       quiet=False)
 
-        # ── Load classifier and use as shared backbone ─────────
-        vgg = VGG11(num_classes=num_classes)
-        vgg.load_state_dict(torch.load(classifier_ckpt, map_location=device))
-        vgg.eval()
+        # ── Load classifier FULLY and independently ────────────
+        cls_model = VGG11(num_classes=num_classes)
+        cls_model.load_state_dict(
+            torch.load(classifier_ckpt, map_location=device))
 
-        # Shared encoder blocks
-        self.enc1 = vgg.block1
-        self.enc2 = vgg.block2
-        self.enc3 = vgg.block3
-        self.enc4 = vgg.block4
-        self.enc5 = vgg.block5
-        self.avgpool = vgg.avgpool
+        # Store encoder blocks from classifier
+        self.enc1 = cls_model.block1
+        self.enc2 = cls_model.block2
+        self.enc3 = cls_model.block3
+        self.enc4 = cls_model.block4
+        self.enc5 = cls_model.block5
+        self.avgpool = cls_model.avgpool
+        self.cls_head = cls_model.classifier
 
-        # Classification head
-        self.cls_head = vgg.classifier
-
-        # ── Load localizer — extract regression head only ──────
-        loc_model = VGG11Localizer(pretrained_vgg=vgg, freeze_blocks=0)
+        # ── Load localizer state dict manually ────────────────
+        # Create fresh localizer (no pretrained) then load state
+        loc_model = VGG11Localizer(pretrained_vgg=None, freeze_blocks=0)
         loc_state = torch.load(localizer_ckpt, map_location=device)
         loc_model.load_state_dict(loc_state)
+
+        # Only take the regression head — ignore encoder blocks
         self.loc_avgpool = loc_model.avgpool
         self.loc_head = loc_model.regressor
 
-        # ── Load UNet — extract decoder only ──────────────────
-        unet_model = VGG11UNet(pretrained_vgg=vgg, num_classes=3)
+        # ── Load UNet state dict manually ─────────────────────
+        unet_model = VGG11UNet(pretrained_vgg=None, num_classes=3)
         unet_state = torch.load(unet_ckpt, map_location=device)
         unet_model.load_state_dict(unet_state)
+
+        # Only take decoder — ignore encoder blocks
         self.up5 = unet_model.up5
         self.dec5 = unet_model.dec5
         self.up4 = unet_model.up4
@@ -70,7 +72,7 @@ class MultiTaskPerceptionModel(nn.Module):
         self.to(device)
 
     def forward(self, x: torch.Tensor) -> dict:
-        # Shared encoder
+        # Shared encoder — using classifier's weights
         e1 = self.enc1(x)
         e2 = self.enc2(e1)
         e3 = self.enc3(e2)
