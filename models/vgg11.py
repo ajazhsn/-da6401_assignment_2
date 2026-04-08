@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from models.layers import CustomDropout
 from typing import Dict, Tuple, Union
 
 IMAGE_SIZE = 224
@@ -16,50 +15,39 @@ def conv_bn_relu(in_ch: int, out_ch: int) -> nn.Sequential:
 
 class VGG11Encoder(nn.Module):
     """
-    VGG11 encoder backbone from scratch.
-    BatchNorm after each Conv for training stability.
-    Returns intermediate feature maps for U-Net skip connections.
-    Feature sizes for 224x224 input:
-        b1: (B, 64,  224, 224)
-        b2: (B, 128, 112, 112)
-        b3: (B, 256,  56,  56)
-        b4: (B, 512,  28,  28)
-        b5: (B, 512,  14,  14)
-        bottleneck: (B, 512, 7, 7)
+    VGG11 from scratch (Simonyan & Zisserman 2014).
+    BatchNorm after each Conv stabilizes training and allows higher LR.
+    Pools are separate from blocks so skip connections capture
+    pre-pool feature maps at full spatial resolution for U-Net.
     """
     def __init__(self, in_channels: int = 3):
         super().__init__()
-
         self.block1 = nn.Sequential(conv_bn_relu(in_channels, 64))
         self.pool1  = nn.MaxPool2d(2, 2)
-
         self.block2 = nn.Sequential(conv_bn_relu(64, 128))
         self.pool2  = nn.MaxPool2d(2, 2)
-
         self.block3 = nn.Sequential(
             conv_bn_relu(128, 256),
             conv_bn_relu(256, 256),
         )
-        self.pool3 = nn.MaxPool2d(2, 2)
-
+        self.pool3  = nn.MaxPool2d(2, 2)
         self.block4 = nn.Sequential(
             conv_bn_relu(256, 512),
             conv_bn_relu(512, 512),
         )
-        self.pool4 = nn.MaxPool2d(2, 2)
-
+        self.pool4  = nn.MaxPool2d(2, 2)
         self.block5 = nn.Sequential(
             conv_bn_relu(512, 512),
             conv_bn_relu(512, 512),
         )
-        self.pool5 = nn.MaxPool2d(2, 2)
-
+        self.pool5  = nn.MaxPool2d(2, 2)
         self._init_weights()
 
     def _init_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+                nn.init.kaiming_normal_(m.weight, mode="fan_out",
+                                        nonlinearity="relu")
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
             elif isinstance(m, nn.BatchNorm2d):
@@ -67,26 +55,21 @@ class VGG11Encoder(nn.Module):
                 nn.init.zeros_(m.bias)
 
     def forward(self, x: torch.Tensor, return_features: bool = False):
-        f1 = self.block1(x)          # 64,  224
-        p1 = self.pool1(f1)          # 64,  112
-
-        f2 = self.block2(p1)         # 128, 112
-        p2 = self.pool2(f2)          # 128,  56
-
-        f3 = self.block3(p2)         # 256,  56
-        p3 = self.pool3(f3)          # 256,  28
-
-        f4 = self.block4(p3)         # 512,  28
-        p4 = self.pool4(f4)          # 512,  14
-
-        f5 = self.block5(p4)         # 512,  14
-        bottleneck = self.pool5(f5)  # 512,   7
+        """
+        return_features=False → bottleneck (B,512,7,7)
+        return_features=True  → (bottleneck, dict of b1..b5)
+        Skip maps are taken BEFORE pooling for maximum spatial detail.
+        """
+        f1 = self.block1(x)        # (B, 64,  224, 224)
+        f2 = self.block2(self.pool1(f1))   # (B, 128, 112, 112)
+        f3 = self.block3(self.pool2(f2))   # (B, 256,  56,  56)
+        f4 = self.block4(self.pool3(f3))   # (B, 512,  28,  28)
+        f5 = self.block5(self.pool4(f4))   # (B, 512,  14,  14)
+        bn = self.pool5(f5)                # (B, 512,   7,   7)
 
         if return_features:
-            return bottleneck, {"b1": f1, "b2": f2, "b3": f3, "b4": f4, "b5": f5}
-        return bottleneck
+            return bn, {"b1": f1, "b2": f2, "b3": f3, "b4": f4, "b5": f5}
+        return bn
 
 
-# Autograder alias
 VGG11 = VGG11Encoder
-VGG11Encoder = VGG11Encoder
