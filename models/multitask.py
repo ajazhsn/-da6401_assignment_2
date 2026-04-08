@@ -36,11 +36,11 @@ class MultiTaskPerceptionModel(nn.Module):
         super().__init__()
 
         os.makedirs(os.path.dirname(classifier_path), exist_ok=True)
-        gdown.download(id="1awbviDYTW8yF_oL78YW5_E_nIP6BU4M0",
+        gdown.download(id="1hZfpmwz3xBoWv3mBuYLhoR6cJBoE7nNZ",
                        output=classifier_path, quiet=False)
-        gdown.download(id="1Ub_6gwnRiHhOQAiL6kXsJMAT5W0Jf19L",
+        gdown.download(id="1BfYlykJNyy-FwXPiR5qF89YA43aZWDgO",
                        output=localizer_path,  quiet=False)
-        gdown.download(id="1H1Nv9hUhrRnIulPAmRYNpCcTqbUgSBdp",
+        gdown.download(id="1CF5b_z1pnr3tVxt2qsHrPEJf2CLrQACc",
                        output=unet_path,       quiet=False)
 
         # 3 independent encoders — critical for correct head performance
