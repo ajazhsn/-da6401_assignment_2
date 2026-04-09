@@ -40,7 +40,7 @@ class MultiTaskPerceptionModel(nn.Module):
                        output=classifier_path, quiet=False)
         gdown.download(id="1BfYlykJNyy-FwXPiR5qF89YA43aZWDgO",
                        output=localizer_path,  quiet=False)
-        gdown.download(id="1CF5b_z1pnr3tVxt2qsHrPEJf2CLrQACc",
+        gdown.download(id="1TsBvpIDzlPstgN8-uSxkstb-0szVlJOj",
                        output=unet_path,       quiet=False)
 
         # 3 independent encoders — critical for correct head performance
